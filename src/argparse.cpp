@@ -1,14 +1,114 @@
 #include "argparse.hpp"
+#include <sstream>
 
 namespace argparse {
 
-[[nodiscard]] bool Parser::parse(const std::span<const char*>& words) const {
+bool parse_word(
+    const std::string& word,
+    const std::vector<std::string>& choices,
+    int& value)
+{
+    try {
+        value = std::stoi(word);
+        return true;
+    } catch (const std::invalid_argument&) {
+        std::cout << "Invalid integer argument '" << word << "'\n";
+        return false;
+    }
+}
+
+bool parse_word(
+    const std::string& word,
+    const std::vector<std::string>& choices,
+    std::optional<int>& value)
+{
+    value.emplace();
+    return parse_word(word, choices, value.value());
+}
+
+bool parse_word(
+    const std::string& word,
+    const std::vector<std::string>& choices,
+    double& value)
+{
+    try {
+        value = std::stod(word);
+        return true;
+    } catch (const std::invalid_argument&) {
+        std::cout << "Invalid integer argument '" << word << "'\n";
+        return false;
+    }
+}
+
+bool parse_word(
+    const std::string& word,
+    const std::vector<std::string>& choices,
+    std::optional<double>& value)
+{
+    value.emplace();
+    return parse_word(word, choices, value.value());
+}
+
+bool parse_word(
+    const std::string& word,
+    const std::vector<std::string>& choices,
+    std::string& value)
+{
+    if (!choices.empty()) {
+        auto iter = std::find(choices.begin(), choices.end(), word);
+        if (iter == choices.end()) {
+            std::cout << "Invalid value '" << word << "', not a valid choice\n";
+            return false;
+        }
+    }
+    value = word;
+    return true;
+}
+
+bool parse_word(
+    const std::string& word,
+    const std::vector<std::string>& choices,
+    std::optional<std::string>& value)
+{
+    value.emplace();
+    return parse_word(word, choices, value.value());
+}
+
+bool Parser::parse(const char* program, const std::span<const char*>& words) const {
+    bool have_list_arg = false;
+    bool have_optional_arg = false;
+    for (const auto& item: items) {
+        if (item.type == ItemType::Flag) continue;
+        if (!item.is_optional && have_optional_arg){
+            throw UsageError("Cannot have a required argument following an optional argument");
+        }
+        have_optional_arg |= item.is_optional;
+        if (have_list_arg) {
+            throw UsageError("List argument must be the final argument");
+        }
+        if (std::get_if<std::vector<std::string>*>(&item.output)) {
+            have_list_arg = true;
+            continue;
+        }
+    }
+
+    if (words.empty()) {
+        std::cout << help_message(program) << std::endl;
+        return false;
+    }
+    for (auto word: words) {
+        if (std::string_view(word) == "-h" || std::string_view(word) == "--help") {
+            std::cout << help_message(program) << std::endl;
+            return false;
+        }
+    }
+
     std::size_t word_i = 0;
     std::size_t arg_i = 0; // Positional argument
 
-    std::vector<bool> element_has_value;
-    for (const auto& element: elements) {
-        element_has_value.push_back(element.has_default);
+    std::vector<bool> item_has_value;
+    for (const auto& item: items) {
+        item_has_value.push_back(item.has_default);
     }
 
     while (word_i < words.size()) {
@@ -18,13 +118,13 @@ namespace argparse {
         assert(!word.empty());
         bool is_flag = word[0] == '-';
 
-        std::size_t element_i;
+        std::size_t item_i;
         if (!is_flag) {
             if (arg_i == args.size()) {
                 std::cout << "Extra position argument '" << word << "'\n";
                 return false;
             }
-            element_i = args[arg_i];
+            item_i = args[arg_i];
             arg_i++;
         } else {
             auto iter = flags.find(word);
@@ -32,13 +132,14 @@ namespace argparse {
                 std::cout << "Unknown flag '" << word << "'\n";
                 return false;
             }
-            element_i = iter->second;
+            item_i = iter->second;
         }
 
-        const Element& element = elements[element_i];
-        element_has_value[element_i] = true;
+        const Item& item = items[item_i];
+        item_has_value[item_i] = true;
 
-        if (auto output = std::get_if<bool*>(&element.output); is_flag && output) {
+        if (auto output = std::get_if<bool*>(&item.output)) {
+            assert(is_flag);
             **output = true;
             continue;
         }
@@ -52,7 +153,7 @@ namespace argparse {
             word_i++;
         }
 
-        if (auto output = std::get_if<std::vector<std::string>*>(&element.output)) {
+        if (auto output = std::get_if<std::vector<std::string>*>(&item.output)) {
             (*output)->clear();
             (*output)->push_back(word);
             while (word_i != words.size()) {
@@ -67,90 +168,166 @@ namespace argparse {
         else {
             bool valid = std::visit([&](auto output) -> bool {
                 using T = std::decay_t<decltype(*output)>;
-                if constexpr(is_string_field<T>) {
-                    if (!element.choices.empty()) {
-                        auto iter = std::find(
-                            element.choices.begin(),
-                            element.choices.end(),
-                            word);
-                        if (iter == element.choices.end()) {
-                            std::cout << "Invalid value '" << word << "', not a valid choice\n";
-                            return false;
-                        }
-                    }
-                    *output = word;
-                    return true;
+                if constexpr(!std::is_same_v<T, bool> && !std::is_same_v<T, std::vector<std::string>>) {
+                    return parse_word(word, item.choices, *output);
                 }
-                if constexpr(is_int_field<T>) {
-                    try {
-                        *output = std::stoi(word);
-                        return true;
-                    } catch (const std::invalid_argument&) {
-                        std::cout << "Invalid int value '" << word << "'\n";
-                        return false;
-                    }
-                }
-                if constexpr(is_double_field<T>) {
-                    try {
-                        *output = std::stod(word);
-                        return true;
-                    } catch (const std::invalid_argument&) {
-                        std::cout << "Invalid int value '" << word << "'\n";
-                        return false;
-                    }
-                }
-                if constexpr(std::is_same_v<T, bool>) {
-                    if (word == "true") {
-                        *output = true;
-                        return true;
-                    } else if (word == "false") {
-                        *output = false;
-                        return true;
-                    } else {
-                        std::cout << "Invalid bool value '" << word << "'\n";
-                        return false;
-                    }
-                }
-                std::cout << word << std::endl;
-                std::cout << is_string_field<T> << std::endl;
                 assert(false);
                 return false;
-            }, element.output);
-
+            }, item.output);
             if (!valid) {
                 return false;
             }
         }
     }
 
-    for (std::size_t i = 0; i < elements.size(); i++) {
-        if (element_has_value[i]) continue;
-        std::cout << "Missing value for '" << elements[i].identifier << "'\n";
+    for (std::size_t i = 0; i < items.size(); i++) {
+        if (item_has_value[i]) continue;
+        std::cout << "Missing value for '" << items[i].identifier << "'\n";
         return false;
     }
 
     return true;
 }
 
-bool Parser::validate_label(const std::string& label) const {
-    if (label.empty()) return false;
-    if (!std::isalpha(label[0])) return false;
-    for (char c: label) {
-        if (!std::isalnum(c) && c != '-' && c != '_') {
-            return false;
+std::string Parser::help_message(const char* program) const {
+    std::stringstream ss;
+    ss << program;
+    if (!description.empty()) {
+        ss << " - " << description;
+    }
+    ss << "\n";
+
+    ss << "\033[1mUSAGE:\033[0m " << program;
+
+    // [optional args]
+    // <required args>
+    // {default values}
+
+    auto print_item = [&ss](const Item& item, bool initial_space=true) {
+        if (initial_space) {
+            ss << " ";
+        }
+        if (!item.has_default) {
+            ss << "<" << item.identifier << ">";
+            return;
+        }
+        ss << "[" << item.identifier;
+        if (std::get_if<std::vector<std::string>*>(&item.output)) {
+            ss << "...";
+        } else {
+            std::visit([&](const auto& output) {
+                using T = std::decay_t<decltype(*output)>;
+                if constexpr(!is_optional_t<T>) {
+                    ss << " {" << *output << "}";
+                }
+            }, item.output);
+        }
+        ss << "]";
+    };
+
+    bool have_flag_help = false;
+    bool have_arg_help = false;
+
+    // Required flags <--flag|-f>
+    ss << "\n ";
+    for (const auto& item: items) {
+        if (item.type != ItemType::Flag) continue;
+        if (item.has_default) continue;
+        print_item(item);
+        have_flag_help |= !item.help.empty() || !item.choices.empty();
+    }
+    // Optional flags [--flag|-f] {default}
+    ss << "\n ";
+    for (const auto& item: items) {
+        if (item.type != ItemType::Flag) continue;
+        if (!item.has_default) continue;
+        print_item(item);
+        have_flag_help |= !item.help.empty() || !item.choices.empty();
+    }
+    // Args (note: guaranteed to have required args first)
+    ss << "\n ";
+    for (const auto& item: items) {
+        if (item.type != ItemType::Arg) continue;
+        print_item(item);
+        have_arg_help |= !item.help.empty() || !item.choices.empty();
+    }
+    ss << "\n";
+
+    auto print_help = [&ss](const std::string& help) {
+        if (help.empty()) return;
+        ss << "    " << help << "\n";
+    };
+
+    auto print_choices = [&ss](const std::vector<std::string>& choices) {
+        if (choices.empty()) return;
+        ss << "    Choices: [";
+        for (std::size_t i = 0; i < choices.size(); i++) {
+            ss << choices[i];
+            if (i+1 != choices.size()) {
+                ss << ", ";
+            }
+        }
+        ss << "]\n";
+    };
+
+    if (have_flag_help) {
+        ss << "\n\033[1mFLAGS:\033[0m\n";
+        for (const auto& item: items) {
+            if (item.type != ItemType::Flag) continue;
+            if (item.has_default) continue;
+            if (item.help.empty() && item.choices.empty()) continue;
+            ss << "  ";
+            print_item(item, false);
+            ss << "\n";
+            print_help(item.help);
+            print_choices(item.choices);
+        }
+        for (const auto& item: items) {
+            if (item.type != ItemType::Flag) continue;
+            if (!item.has_default) continue;
+            if (item.help.empty() && item.choices.empty()) continue;
+            ss << "  ";
+            print_item(item, false);
+            ss << "\n";
+            print_help(item.help);
+            print_choices(item.choices);
         }
     }
-    return true;
+    if (have_flag_help) {
+        ss << "\n\033[1mARGUMENTS:\033[0m\n";
+        for (const auto& item: items) {
+            if (item.type != ItemType::Arg) continue;
+            if (item.help.empty() && item.choices.empty()) continue;
+            ss << "  ";
+            print_item(item, false);
+            ss << "\n";
+            print_help(item.help);
+            print_choices(item.choices);
+        }
+    }
+
+    return ss.str();
 }
 
-void Parser::add_identifier(const std::string& identifier) {
+ItemType Parser::parse_identifier(const std::string& identifier) {
+    auto validate_word = [](const std::string& word) -> bool {
+        if (word.empty()) return false;
+        if (!std::isalpha(word[0])) return false;
+        for (char c: word) {
+            if (!std::isalnum(c) && c != '-' && c != '_') {
+                return false;
+            }
+        }
+        return true;
+    };
+
     assert(!identifier.empty());
     if (identifier[0] != '-') {
-        if (!validate_label(identifier)) {
+        if (!validate_word(identifier)) {
             throw UsageError("Invalid identifier '" + identifier + "'");
         }
-        args.push_back(elements.size());
-        return;
+        args.push_back(items.size());
+        return ItemType::Arg;
     }
 
     std::size_t part_begin = 0;
@@ -163,7 +340,7 @@ void Parser::add_identifier(const std::string& identifier) {
             throw UsageError("Cannot use flags '-h' and '--help', reserved for printing help message");
         }
         if (part.size() >= 2 && part[1] == '-') {
-            if (!validate_label(part.substr(2))) {
+            if (!validate_word(part.substr(2))) {
                 throw UsageError("Invalid flag '" + part + "'");
             }
         } else {
@@ -176,8 +353,10 @@ void Parser::add_identifier(const std::string& identifier) {
         if (iter != flags.end()) {
             throw UsageError("Duplicate flag '" + part + "'");
         }
-        flags.emplace(part, elements.size());
+        flags.emplace(part, items.size());
     }
+
+    return ItemType::Flag;
 }
 
 } // namespace argparse

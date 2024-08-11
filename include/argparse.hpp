@@ -10,161 +10,138 @@
 #include <assert.h>
 #include <span>
 #include <iostream>
+#include <tuple>
 
 
 namespace argparse {
 
-using ValuePtr = std::variant<
->;
-
-using OptValuePtr = std::variant<
->;
-
-
-using FlagPtr = bool*;
-
-using FieldPtr = std::variant<
-    int*,
-    double*,
-    std::string*,
-    std::optional<int>*,
-    std::optional<double>*,
-    std::optional<std::string>*,
-    std::vector<std::string>*,
-    bool*
->;
+template <typename T, bool Optional>
+using select_opt = std::conditional_t<Optional, std::optional<T>, T>;
 
 template <typename T>
-concept field_t = requires(T t) {
-    { &t } -> std::convertible_to<FieldPtr>;
-};
+concept is_simple_t =
+    std::is_same_v<T, int>
+    || std::is_same_v<T, double>
+    || std::is_same_v<T, std::string>;
 
 template <typename T>
-concept is_opt_field =
+concept is_optional_t =
     std::is_same_v<T, std::optional<int>>
     || std::is_same_v<T, std::optional<double>>
     || std::is_same_v<T, std::optional<std::string>>
-    || std::is_same_v<T, std::vector<std::string>>
-    || std::is_same_v<T, bool>;
+    || std::is_same_v<T, bool>
+    || std::is_same_v<T, std::vector<std::string>>;
 
 template <typename T>
-concept is_string_field =
-    std::is_same_v<T, std::string>
-    || std::is_same_v<T, std::optional<std::string>>;
+concept is_output_t = is_simple_t<T> || is_optional_t<T>;
 
-template <typename T>
-concept is_int_field =
-    std::is_same_v<T, int>
-    || std::is_same_v<T, std::optional<int>>;
+using output_ptr_t = std::variant<
+    int*,
+    std::optional<int>*,
+    double*,
+    std::optional<double>*,
+    std::string*,
+    std::optional<std::string>*,
+    bool*,
+    std::vector<std::string>*
+>;
 
-template <typename T>
-concept is_double_field =
-    std::is_same_v<T, double>
-    || std::is_same_v<T, std::optional<double>>;
-
-struct Element {
-    std::string identifier;
-    FieldPtr output;
-    std::vector<std::string> choices;
-    bool has_default;
-    bool is_optional;
-    Element(const std::string& identifier, const FieldPtr& output):
-        identifier(identifier), output(output), has_default(false), is_optional(false)
+class UsageError: public std::runtime_error {
+public:
+    UsageError(const std::string& message):
+        std::runtime_error(message)
     {}
 };
 
-// TODO:
-// - Store default values in order to print them in help message
-// - Throw usage error if any flag/arg follows a string list positional arg
+enum class ItemType {
+    Arg,
+    Flag
+};
+
+struct Item {
+    output_ptr_t output;
+    std::string identifier;
+    ItemType type;
+    bool has_default;
+    bool is_optional;
+    std::vector<std::string> choices;
+    std::string help;
+};
+
+template <typename T>
+class ItemHandle {
+public:
+    ItemHandle(T* output, Item* item):
+        output(output),
+        item(item)
+    {}
+    template <typename S>
+    requires std::is_convertible_v<S, T>
+    ItemHandle& default_value(const S& value) {
+        *output = value;
+        item->has_default = true;
+        return *this;
+    }
+    ItemHandle& choices(const std::vector<std::string>& choices) {
+        if (choices.empty()) {
+            throw UsageError("Choices cannot be empty");
+        }
+        item->choices = choices;
+        return *this;
+    }
+    ItemHandle& help(const std::string& help) {
+        item->help = help;
+        return *this;
+    }
+private:
+    T* output;
+    Item* item;
+};
 
 class Parser {
 public:
-    class UsageError: public std::runtime_error {
-    public:
-        UsageError(const std::string& message):
-            std::runtime_error(message)
-        {}
-    };
+    Parser(const std::string& description = ""):
+        description(description)
+    {}
 
-    template <field_t T>
-    void add(
-        T& output,
-        const std::string& identifier)
-    {
-        Element element(identifier, &output);
-        element.is_optional = is_opt_field<T>;
-        element.has_default = is_opt_field<T>;
-        if constexpr(std::is_same_v<bool, T>) {
+    template <is_output_t T>
+    ItemHandle<T> add(T& output, const std::string& identifier) {
+        Item item;
+        item.output = &output;
+        item.identifier = identifier;
+        item.type = parse_identifier(item.identifier);
+        item.is_optional = is_optional_t<T>;
+        item.has_default = is_optional_t<T>;
+
+        // Special cases
+        if constexpr(std::is_same_v<T, bool>) {
+            if (item.type != ItemType::Flag) {
+                throw UsageError("Args cannot take boolean values");
+            }
             output = false;
         }
-        add_identifier(identifier);
-
-        elements.push_back(element);
-    }
-
-    template <field_t T, typename DefaultT>
-    requires std::is_convertible_v<DefaultT, T>
-    void add(
-        T& output,
-        const std::string& identifier,
-        const DefaultT& default_value)
-    {
-        static_assert(!is_opt_field<T>);
-
-        Element element(identifier, &output);
-        element.has_default = true;
-        output = default_value;
-
-        add_identifier(identifier);
-        elements.push_back(element);
-    }
-
-    template <field_t T, typename DefaultT>
-    requires (std::is_same_v<DefaultT, std::nullopt_t> || std::is_convertible_v<DefaultT, T>)
-    void add(
-        T& output,
-        const std::string& identifier,
-        const DefaultT& default_value,
-        const std::vector<std::string>& choices)
-    {
-        static_assert(
-            std::is_same_v<T, std::string>
-            || std::is_same_v<T, std::optional<std::string>>
-            || std::is_same_v<T, std::vector<std::string>>);
-
-        Element element(identifier, &output);
-        element.choices = choices;
-        if constexpr(!std::is_same_v<DefaultT, std::nullopt_t>) {
-            auto iter = std::find(choices.begin(), choices.end(), default_value);
-            if (iter == choices.end()) {
-                throw UsageError("Invalid default '" + std::string(default_value) + "', not one of the given choices");
-            }
-            output = default_value;
-            element.has_default = true;
+        if constexpr(std::is_same_v<T, std::vector<std::string>>) {
+            output.clear();
         }
-        if constexpr(std::is_same_v<DefaultT, std::nullopt_t>) {
-            element.has_default = is_opt_field<T>;
-        }
-        element.is_optional = is_opt_field<T>;
 
-        add_identifier(identifier);
-        elements.push_back(element);
+        items.push_back(item);
+        return ItemHandle(&output, &items.back());
     }
 
-    [[nodiscard]] bool parse(const std::span<const char*>& words) const;
+    [[nodiscard]] bool parse(const char* program, const std::span<const char*>& words) const;
 
     [[nodiscard]] bool parse(int argc, const char** argv) const {
-        return parse(std::span<const char*>(argv+1, argc-1));
+        return parse(argv[0], std::span<const char*>(argv+1, argc-1));
     }
 
 private:
-    bool validate_label(const std::string& label) const;
-    void add_identifier(const std::string& identifier);
+    std::string help_message(const char* program) const;
+    ItemType parse_identifier(const std::string& identifier);
 
-    std::vector<Element> elements;
+    const std::string description;
+    std::vector<Item> items;
     std::unordered_map<std::string, std::size_t> flags;
     std::vector<std::size_t> args;
-    bool have_list_arg = false;
 };
 
 } // namespace argparse

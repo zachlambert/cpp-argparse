@@ -11,14 +11,25 @@ int main(int argc, const char** argv) {
     std::vector<std::string> other;
 
     argparse::Parser parser;
-    parser.add(foo, "--foo");
-    parser.add(bar, "-b|--bar", "default");
-    parser.add(fruit, "--fruit", std::nullopt, {"apple", "banana", "pear"});
-    parser.add(color1, "--color1", std::nullopt, {"red", "green", "blue"});
-    parser.add(color2, "--color2", "red", {"red", "green", "blue"});
-    parser.add(a, "a");
-    parser.add(b, "b");
-    parser.add(other, "other");
+    parser.add(foo, "--foo")
+        .help("Foo flag");
+    parser.add(bar, "-b|--bar")
+        .default_value("asdf");
+    parser.add(fruit, "--fruit")
+        .choices({"apple", "banana", "pear"})
+        .help("Fruit flag");
+    parser.add(color1, "--color1")
+        .choices({"red", "green", "blue"});
+    parser.add(color2, "--color2")
+        .default_value("red")
+        .choices({"red", "green", "blue"});
+    parser.add(a, "a")
+        .default_value(2)
+        .help("First number to add");
+    parser.add(b, "b")
+        .help("Second number to add");
+    parser.add(other, "other")
+        .help("Other words to print out");
 
     if (!parser.parse(argc, argv)) {
         return 1;
