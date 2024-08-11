@@ -24,12 +24,8 @@ endif()
 
 # Examples
 
-add_executable(example_one example/one.cpp)
-target_link_libraries(example_one argparse)
-
-add_executable(example_two example/two.cpp)
-target_link_libraries(example_two argparse)
-
+add_executable(example_basic example/basic.cpp)
+target_link_libraries(example_basic argparse)
 
 # Install target
 

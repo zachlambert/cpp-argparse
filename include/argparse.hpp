@@ -1,142 +1,81 @@
 #pragma once
 
-#include <vector>
-#include <string>
+#include <concepts>
 #include <variant>
-#include <unordered_map>
+#include <string>
 #include <optional>
+#include <vector>
+#include <unordered_map>
 #include <stdexcept>
-#include <memory>
-#include <unordered_set>
-#include <iostream>
 #include <assert.h>
+#include <span>
+#include <iostream>
 
 
 namespace argparse {
 
-struct Int {
-    std::optional<int> default_value;
-    Int() {}
-    Int(int default_value): default_value(default_value) {}
+using ValuePtr = std::variant<
+>;
+
+using OptValuePtr = std::variant<
+>;
+
+
+using FlagPtr = bool*;
+
+using FieldPtr = std::variant<
+    int*,
+    double*,
+    std::string*,
+    std::optional<int>*,
+    std::optional<double>*,
+    std::optional<std::string>*,
+    std::vector<std::string>*,
+    bool*
+>;
+
+template <typename T>
+concept field_t = requires(T t) {
+    { &t } -> std::convertible_to<FieldPtr>;
 };
 
-struct Double {
-    std::optional<double> default_value;
-    Double() {}
-    Double(double default_value): default_value(default_value) {}
-};
+template <typename T>
+concept is_opt_field =
+    std::is_same_v<T, std::optional<int>>
+    || std::is_same_v<T, std::optional<double>>
+    || std::is_same_v<T, std::optional<std::string>>
+    || std::is_same_v<T, std::vector<std::string>>
+    || std::is_same_v<T, bool>;
 
-struct NoValue {};
+template <typename T>
+concept is_string_field =
+    std::is_same_v<T, std::string>
+    || std::is_same_v<T, std::optional<std::string>>;
 
-struct String {
-    std::string default_value;
+template <typename T>
+concept is_int_field =
+    std::is_same_v<T, int>
+    || std::is_same_v<T, std::optional<int>>;
+
+template <typename T>
+concept is_double_field =
+    std::is_same_v<T, double>
+    || std::is_same_v<T, std::optional<double>>;
+
+struct Element {
+    std::string identifier;
+    FieldPtr output;
     std::vector<std::string> choices;
-    String() {}
-    String(const std::string& default_value): default_value(default_value) {}
-    String(const std::vector<std::string>& choices): choices(choices) {}
-    String(const std::string& default_value, const std::vector<std::string>& choices):
-        default_value(default_value), choices(choices)
+    bool has_default;
+    bool is_optional;
+    Element(const std::string& identifier, const FieldPtr& output):
+        identifier(identifier), output(output), has_default(false), is_optional(false)
     {}
 };
 
-using FieldType = std::variant<
-    Int,
-    Double,
-    NoValue,
-    String
->;
-
-
-struct Field {
-    std::string label;
-    FieldType type;
-    char short_flag;
-    bool optional;
-    std::string help;
-    Field():
-        short_flag(0),
-        optional(false)
-    {}
-};
-
-using Value = std::variant<
-    int,
-    double,
-    bool,
-    std::string
->;
-
-struct ResultValue {
-    std::optional<Value> value;
-    bool optional;
-    ResultValue(const std::optional<Value>& value, bool optional):
-        value(value), optional(optional)
-    {}
-};
-
-class Result {
-public:
-    class LookupError: public std::runtime_error {
-    public:
-        LookupError(const std::string& message):
-            std::runtime_error(message)
-        {}
-    };
-
-    template <typename T>
-    const T& get(const std::string& label) const {
-        auto iter = values.find(label);
-        if (iter == values.end()) {
-            throw LookupError("No field with label '" + label + "'");
-        }
-        if (iter->second.optional) {
-            throw LookupError("operator[] should only be used for non-optional fields");
-        }
-        auto ptr = std::get_if<T>(&iter->second.value.value());
-        if (!ptr) {
-            throw LookupError("Field '" + label + "' doesn't match requested type");
-        }
-        return *ptr;
-    };
-
-#if 0
-    template <typename T>
-    const std::optional<T>& operator[](const std::string& label) const {
-        auto iter = values.find(label);
-        if (iter == values.end()) {
-            throw LookupError("No field with label '" + label + "'");
-        }
-        if (!iter->second.optional) {
-            throw LookupError("operator[] should only be used for non-optional fields");
-        }
-        auto ptr = std::get_if<T>(&iter->second.value);
-        if (!ptr) {
-            throw LookupError("Field '" + label + "' doesn't match requested type");
-        }
-        return *ptr;
-    };
-#endif
-
-    const std::string& subcommand() const {
-        if (!subcommand_.has_value()) {
-            throw LookupError("Parser has no subcommand");
-        }
-        return subcommand_.value().first;
-    }
-
-    const Result& subcommand_result(const std::string& name) const {
-        if (!subcommand_.has_value()) {
-            throw LookupError("Parser has no subcommand");
-        }
-        return *subcommand_.value().second;
-    }
-
-private:
-    std::unordered_map<std::string, ResultValue> values;
-    std::optional<std::pair<std::string, std::unique_ptr<Result>>> subcommand_;
-
-    friend class Parser;
-};
+// TODO:
+// - Store default values in order to print them in help message
+// - Throw usage error if any flag/arg follows a string list positional arg
 
 class Parser {
 public:
@@ -147,171 +86,258 @@ public:
         {}
     };
 
-    void arg(
-            const std::string& label,
-            const FieldType& type,
-            bool optional = false,
-            const std::string& help = "")
+    template <field_t T>
+    void add(
+        T& output,
+        const std::string& identifier)
     {
-        if (label.empty()) {
-            throw UsageError("Label cannot be empty");
+        Element element(identifier, &output);
+        element.is_optional = is_opt_field<T>;
+        element.has_default = is_opt_field<T>;
+        if constexpr(std::is_same_v<bool, T>) {
+            output = false;
         }
-        if (labels.count(label) != 0) {
-            throw UsageError("Duplicate label");
-        }
-        if (!subparsers.empty() && optional) {
-            throw UsageError("Cannot have optional arguments and a subparser");
-        }
-        if (!optional && !args.empty() && args.back().optional) {
-            throw UsageError("A required argument cannot follow an optional argument");
-        }
-        if (std::get_if<NoValue>(&type)) {
-            throw UsageError("Cannot have an argument with no value");
-        }
+        add_identifier(identifier);
 
-        Field field;
-        field.label = label;
-        field.optional = optional;
-        field.help = help;
-
-        args.push_back(field);
-        labels.insert(label);
+        elements.push_back(element);
     }
 
-    void flag(
-        const std::string& label,
-        const FieldType& type,
-        bool required = true,
-        const std::string& help = "")
+    template <field_t T, typename DefaultT>
+    requires std::is_convertible_v<DefaultT, T>
+    void add(
+        T& output,
+        const std::string& identifier,
+        const DefaultT& default_value)
     {
-        if (label.empty()) {
-            throw UsageError("Label cannot be empty");
-        }
-        if (labels.count(label) != 0) {
-            throw UsageError("Duplicate label");
-        }
+        static_assert(!is_opt_field<T>);
 
-        Field field;
-        field.label = label;
-        field.type = type;
-        field.help = help;
+        Element element(identifier, &output);
+        element.has_default = true;
+        output = default_value;
 
-        flags.push_back(field);
-        labels.insert(label);
+        add_identifier(identifier);
+        elements.push_back(element);
     }
 
-    void flag(
-        const std::string& label,
-        char short_flag,
-        const FieldType& type,
-        bool required = true,
-        const std::string& help = "")
+    template <field_t T, typename DefaultT>
+    requires (std::is_same_v<DefaultT, std::nullopt_t> || std::is_convertible_v<DefaultT, T>)
+    void add(
+        T& output,
+        const std::string& identifier,
+        const DefaultT& default_value,
+        const std::vector<std::string>& choices)
     {
-        if (label.empty()) {
-            throw UsageError("Label cannot be empty");
-        }
-        if (labels.count(label) != 0) {
-            throw UsageError("Duplicate label");
-        }
+        static_assert(
+            std::is_same_v<T, std::string>
+            || std::is_same_v<T, std::optional<std::string>>
+            || std::is_same_v<T, std::vector<std::string>>);
 
-        Field field;
-        field.label = label;
-        field.type = type;
-        field.short_flag = short_flag;
-        field.help = help;
+        Element element(identifier, &output);
+        element.choices = choices;
+        if constexpr(!std::is_same_v<DefaultT, std::nullopt_t>) {
+            auto iter = std::find(choices.begin(), choices.end(), default_value);
+            if (iter == choices.end()) {
+                throw UsageError("Invalid default '" + std::string(default_value) + "', not one of the given choices");
+            }
+            output = default_value;
+            element.has_default = true;
+        }
+        if constexpr(std::is_same_v<DefaultT, std::nullopt_t>) {
+            element.has_default = is_opt_field<T>;
+        }
+        element.is_optional = is_opt_field<T>;
 
-        flags.push_back(field);
-        labels.insert(label);
-        short_flags.insert(short_flag);
+        add_identifier(identifier);
+        elements.push_back(element);
     }
 
-    Parser& subparser(const std::string& name) {
-        if (!args.empty() && args.back().optional) {
-            throw UsageError("Cannot have optional arguments and a subparser");
-        }
-        auto iter = subparsers.emplace(name, std::make_unique<Parser>());
-        if (!iter.second) {
-            throw UsageError("Duplicate subparser name");
-        }
-        return *iter.first->second;
+    [[nodiscard]] bool parse(int argc, const char** argv) const {
+        return parse(std::span<const char*>(argv+1, argc-1));
     }
 
-    std::string help_message() const;
-    std::optional<Result> parse(int argc, char** argv) const;
+    [[nodiscard]] bool parse(const std::span<const char*>& words) const {
+        std::size_t word_i = 0;
+        std::size_t arg_i = 0; // Positional argument
+
+        std::vector<bool> element_has_value;
+        for (const auto& element: elements) {
+            element_has_value.push_back(element.has_default);
+        }
+
+        while (word_i < words.size()) {
+            std::string word = words[word_i];
+            word_i++;
+
+            assert(!word.empty());
+            bool is_flag = word[0] == '-';
+
+            std::size_t element_i;
+            if (!is_flag) {
+                if (arg_i == args.size()) {
+                    std::cout << "Extra position argument '" << word << "'\n";
+                    return false;
+                }
+                element_i = args[arg_i];
+                arg_i++;
+            } else {
+                auto iter = flags.find(word);
+                if (iter == flags.end()) {
+                    std::cout << "Unknown flag '" << word << "'\n";
+                    return false;
+                }
+                element_i = iter->second;
+            }
+
+            const Element& element = elements[element_i];
+            element_has_value[element_i] = true;
+
+            if (auto output = std::get_if<bool*>(&element.output); is_flag && output) {
+                **output = true;
+                continue;
+            }
+
+            if (is_flag) {
+                if (word_i == words.size()) {
+                    std::cout << "Expected value after flag '" << word << "'\n";
+                    return false;
+                }
+                word = words[word_i];
+                word_i++;
+            }
+
+            if (auto output = std::get_if<std::vector<std::string>*>(&element.output)) {
+                (*output)->clear();
+                (*output)->push_back(word);
+                while (word_i != words.size()) {
+                    word = words[word_i];
+                    if (is_flag && word[0] == '-') {
+                        break;
+                    }
+                    (*output)->push_back(word);
+                    word_i++;
+                }
+            }
+            else {
+                bool valid = std::visit([&](auto output) -> bool {
+                    using T = std::decay_t<decltype(*output)>;
+                    if constexpr(is_string_field<T>) {
+                        if (!element.choices.empty()) {
+                            auto iter = std::find(
+                                element.choices.begin(),
+                                element.choices.end(),
+                                word);
+                            if (iter == element.choices.end()) {
+                                std::cout << "Invalid value '" << word << "', not a valid choice\n";
+                                return false;
+                            }
+                        }
+                        *output = word;
+                        return true;
+                    }
+                    if constexpr(is_int_field<T>) {
+                        try {
+                            *output = std::stoi(word);
+                            return true;
+                        } catch (const std::invalid_argument&) {
+                            std::cout << "Invalid int value '" << word << "'\n";
+                            return false;
+                        }
+                    }
+                    if constexpr(is_double_field<T>) {
+                        try {
+                            *output = std::stod(word);
+                            return true;
+                        } catch (const std::invalid_argument&) {
+                            std::cout << "Invalid int value '" << word << "'\n";
+                            return false;
+                        }
+                    }
+                    if constexpr(std::is_same_v<T, bool>) {
+                        if (word == "true") {
+                            *output = true;
+                            return true;
+                        } else if (word == "false") {
+                            *output = false;
+                            return true;
+                        } else {
+                            std::cout << "Invalid bool value '" << word << "'\n";
+                            return false;
+                        }
+                    }
+                    std::cout << word << std::endl;
+                    std::cout << is_string_field<T> << std::endl;
+                    assert(false);
+                    return false;
+                }, element.output);
+
+                if (!valid) {
+                    return false;
+                }
+            }
+        }
+
+        for (std::size_t i = 0; i < elements.size(); i++) {
+            if (element_has_value[i]) continue;
+            std::cout << "Missing value for '" << elements[i].identifier << "'\n";
+            return false;
+        }
+
+        return true;
+    }
 
 private:
-    const Field* lookup_flag(const std::string& label) const {
-        for (const auto& field: flags) {
-            if (field.label == label) {
-                return &field;
+    bool validate_label(const std::string& label) const {
+        if (label.empty()) return false;
+        if (!std::isalpha(label[0])) return false;
+        for (char c: label) {
+            if (!std::isalnum(c) && c != '-' && c != '_') {
+                return false;
             }
         }
-        return nullptr;
+        return true;
     }
 
-    const Field* lookup_flag(char short_flag) const {
-        for (const auto& field: flags) {
-            if (field.short_flag == short_flag) {
-                return &field;
+    void add_identifier(const std::string& identifier) {
+        assert(!identifier.empty());
+        if (identifier[0] != '-') {
+            if (!validate_label(identifier)) {
+                throw UsageError("Invalid identifier '" + identifier + "'");
             }
+            args.push_back(elements.size());
+            return;
         }
-        return nullptr;
-    }
 
-    std::optional<Value> parse_value(const std::string_view& word, const FieldType& field_type) const {
-        if (auto field = std::get_if<String>(&field_type)) {
-            if (field->choices.empty()) {
-                return std::string(word);
+        std::size_t part_begin = 0;
+        while (part_begin != std::string::npos) {
+            std::size_t part_end = identifier.find('|', part_begin);
+            std::string part = identifier.substr(part_begin, part_end);
+            part_begin = part_end == std::string::npos ? std::string::npos : part_end + 1;
+
+            if (part == "-h" || part == "--help") {
+                throw UsageError("Cannot use flags '-h' and '--help', reserved for printing help message");
             }
-            if (std::find(field->choices.begin(), field->choices.end(), std::string(word)) == field->choices.end()) {
-                std::cout << "Value '" << word << "' not a valid choice, options are: [";
-                for (std::size_t i = 0; i < field->choices.size(); i++) {
-                    std::cout << field->choices[i];
-                    if (i+1 != field->choices.size()) {
-                        std::cout << ", ";
-                    }
+            if (part.size() >= 2 && part[1] == '-') {
+                if (!validate_label(part.substr(2))) {
+                    throw UsageError("Invalid flag '" + part + "'");
                 }
-                std::cout << "]\n";
-                return std::nullopt;
+            } else {
+                if (part.size() != 2 && !std::isalpha(part[1]))  {
+                    throw UsageError("Invalid flag '" + part + "'");
+                }
             }
-            return std::string(word);
-        }
-        if (auto field = std::get_if<Int>(&field_type)) {
-            try {
-                int result = std::stoi(std::string(word));
-                return result;
-            } catch (const std::invalid_argument&){
-                std::cout << "Invalid integer value '" << word << "'";
-                return std::nullopt;
+
+            auto iter = flags.find(part);
+            if (iter != flags.end()) {
+                throw UsageError("Duplicate flag '" + part + "'");
             }
+            flags.emplace(part, elements.size());
         }
-        if (auto field = std::get_if<Int>(&field_type)) {
-            try {
-                int result = std::stoi(std::string(word));
-                return result;
-            } catch (const std::invalid_argument&){
-                std::cout << "Invalid integer value '" << word << "'";
-                return std::nullopt;
-            }
-        }
-        if (auto field = std::get_if<Double>(&field_type)) {
-            try {
-                int result = std::stoi(std::string(word));
-                return result;
-            } catch (const std::invalid_argument&){
-                std::cout << "Invalid integer value '" << word << "'";
-                return std::nullopt;
-            }
-        }
-        assert(false);
-        return std::nullopt;
     }
 
-    std::unordered_set<std::string> labels;
-    std::unordered_set<char> short_flags;
-    std::vector<Field> args;
-    std::vector<Field> flags;
-    std::unordered_map<std::string, std::unique_ptr<Parser>> subparsers;
+    std::vector<Element> elements;
+    std::unordered_map<std::string, std::size_t> flags;
+    std::vector<std::size_t> args;
+    bool have_list_arg = false;
 };
 
 } // namespace argparse
