@@ -27,6 +27,12 @@ endif()
 add_executable(example_basic example/basic.cpp)
 target_link_libraries(example_basic argparse)
 
+add_executable(example_args example/args.cpp)
+target_link_libraries(example_args argparse)
+
+add_executable(example_subcommand example/subcommand.cpp)
+target_link_libraries(example_subcommand argparse)
+
 # Install target
 
 include(CMakePackageConfigHelpers)

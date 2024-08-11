@@ -11,6 +11,7 @@
 #include <span>
 #include <iostream>
 #include <tuple>
+#include <functional>
 
 
 namespace argparse {
@@ -98,6 +99,14 @@ private:
     Item* item;
 };
 
+class Parser;
+
+class Args {
+public:
+    virtual std::string description() const { return ""; }
+    virtual void build(Parser& parser) = 0;
+};
+
 class Parser {
 public:
     Parser(const std::string& description = ""):
@@ -128,6 +137,25 @@ public:
         return ItemHandle(&output, &items.back());
     }
 
+    template <typename ArgsT, typename OutputT>
+    requires std::is_base_of_v<Args, ArgsT> && std::convertible_to<ArgsT, OutputT>
+    void subcommand(OutputT& output, const std::string& name, const std::string& description="") {
+        Subcommand subcommand;
+        subcommand.name = name;
+        subcommand.description = description;
+        subcommand.callback = [&output](const char* program, std::span<const char*> words) {
+            ArgsT args;
+            Parser parser;
+            ((Args&)args).build(parser);
+            if (!parser.parse(program, words)) {
+                return false;
+            }
+            output = args;
+            return true;
+        };
+        subcommands.push_back(subcommand);
+    };
+
     [[nodiscard]] bool parse(const char* program, const std::span<const char*>& words) const;
 
     [[nodiscard]] bool parse(int argc, const char** argv) const {
@@ -142,6 +170,20 @@ private:
     std::vector<Item> items;
     std::unordered_map<std::string, std::size_t> flags;
     std::vector<std::size_t> args;
+
+    struct Subcommand {
+        std::string name;
+        std::string description;
+        std::function<bool(const char*, std::span<const char*>)> callback;
+    };
+    std::vector<Subcommand> subcommands;
 };
+
+[[nodiscard]] inline bool parse(int argc, const char** argv, Args& args)  {
+    Parser parser(args.description());
+    args.build(parser);
+    return parser.parse(argc, argv);
+}
+
 
 } // namespace argparse
