@@ -27,6 +27,9 @@ endif()
 add_executable(example_one example/one.cpp)
 target_link_libraries(example_one argparse)
 
+add_executable(example_two example/two.cpp)
+target_link_libraries(example_two argparse)
+
 
 # Install target
 
