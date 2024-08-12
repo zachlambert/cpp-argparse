@@ -139,6 +139,7 @@ bool Parser::parse(
                     break;
                 }
                 std::cout << "Extra position argument '" << word << "'\n";
+                std::cout << "\n" << help_message(program) << std::endl;
                 return false;
             }
             item_i = args[arg_i];
@@ -147,6 +148,7 @@ bool Parser::parse(
             auto iter = flags.find(word);
             if (iter == flags.end()) {
                 std::cout << "Unknown flag '" << word << "'\n";
+                std::cout << "\n" << help_message(program) << std::endl;
                 return false;
             }
             item_i = iter->second;
@@ -164,6 +166,7 @@ bool Parser::parse(
         if (is_flag) {
             if (word_i == words.size()) {
                 std::cout << "Expected value after flag '" << word << "'\n";
+                std::cout << "\n" << help_message(program) << std::endl;
                 return false;
             }
             word = words[word_i];
@@ -192,6 +195,7 @@ bool Parser::parse(
                 return false;
             }, item.output);
             if (!valid) {
+                std::cout << "\n" << help_message(program) << std::endl;
                 return false;
             }
         }
@@ -200,6 +204,7 @@ bool Parser::parse(
     for (std::size_t i = 0; i < items.size(); i++) {
         if (item_has_value[i]) continue;
         std::cout << "Missing value for '" << items[i].identifier << "'\n";
+        std::cout << "\n" << help_message(program) << std::endl;
         return false;
     }
 
@@ -265,7 +270,6 @@ std::string Parser::help_message(const std::string& program) const {
 
     // Required flags <--flag|-f>
     if (have_required_flag) {
-        ss << "\n ";
         for (const auto& item: items) {
             if (item.type != ItemType::Flag) continue;
             if (item.has_default) continue;
@@ -275,7 +279,6 @@ std::string Parser::help_message(const std::string& program) const {
     }
     // Optional flags [--flag|-f] {default}
     if (have_optional_flag) {
-        ss << "\n ";
         for (const auto& item: items) {
             if (item.type != ItemType::Flag) continue;
             if (!item.has_default) continue;
@@ -285,7 +288,6 @@ std::string Parser::help_message(const std::string& program) const {
     }
     // Args (note: guaranteed to have required args first)
     if (have_arg) {
-        ss << "\n ";
         for (const auto& item: items) {
             if (item.type != ItemType::Arg) continue;
             print_item(item);

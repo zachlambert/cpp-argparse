@@ -84,6 +84,16 @@ public:
         item->has_default = true;
         return *this;
     }
+    template <typename S>
+    requires std::is_convertible_v<S, T>
+    ItemHandle& default_value(const std::optional<S>& value) {
+        if (!value.has_value()) {
+            return *this;
+        }
+        *output = value.value();
+        item->has_default = true;
+        return *this;
+    }
     ItemHandle& choices(const std::vector<std::string>& choices) {
         if (choices.empty()) {
             throw UsageError("Choices cannot be empty");
@@ -104,7 +114,6 @@ class Parser;
 
 class Args {
 public:
-    virtual std::string description() const { return ""; }
     virtual void build(Parser& parser) = 0;
 };
 
@@ -158,7 +167,10 @@ public:
     SubcommandHandle<OutputT> subcommand(OutputT& output);
 
     [[nodiscard]] bool parse(int argc, const char** argv) const {
-        return parse(std::string(argv[0]), std::span<const char*>(argv+1, argc-1));
+        if (!parse(argv[0], std::span<const char*>(argv+1, argc-1))) {
+            return false;
+        }
+        return true;
     }
 
 private:
@@ -184,19 +196,23 @@ public:
         output(&output),
         subcommands(&subcommands)
     {}
-    template <typename ArgsT>
+    template <typename ArgsT, typename ...ConstructorArgs>
     requires std::is_base_of_v<Args, ArgsT> && std::convertible_to<ArgsT, OutputT>
-    SubcommandHandle& add(const std::string& name) {
+    SubcommandHandle& add(
+        const std::string& name,
+        const std::string& description = "",
+        const ConstructorArgs&... constructor_args)
+    {
         OutputT* captured_output = output;
         Subcommand subcommand;
         subcommand.name = name;
-        subcommand.description = ((const Args&)ArgsT()).description();
+        subcommand.description = description;
         subcommand.callback =
-            [captured_output, name](
+            [captured_output, name, constructor_args...](
                 const std::string& program,
                 std::span<const char*> words)
             {
-                ArgsT args;
+                ArgsT args(constructor_args...);
                 Parser parser;
                 ((Args&)args).build(parser);
                 if (!parser.parse(program + " " + name, words)) {
@@ -222,8 +238,8 @@ SubcommandHandle<OutputT> Parser::subcommand(OutputT& output) {
     return SubcommandHandle<OutputT>(output, subcommands);
 }
 
-[[nodiscard]] inline bool parse(int argc, const char** argv, Args& args)  {
-    Parser parser(args.description());
+[[nodiscard]] inline bool parse(int argc, const char** argv, Args& args, const std::string& description = "")  {
+    Parser parser(description);
     args.build(parser);
     return parser.parse(argc, argv);
 }

@@ -7,9 +7,6 @@ struct CliArgs: public argparse::Args {
     int b;
     std::string op;
 private:
-    std::string description() const override {
-        return "Args test";
-    }
     void build(argparse::Parser& parser) override {
         parser.add(a, "a").help("First argument").default_value(0);
         parser.add(b, "b").help("Second argument").default_value(0);
@@ -19,7 +16,7 @@ private:
 
 int main(int argc, const char** argv) {
     CliArgs args;
-    if (!argparse::parse(argc, argv, args)) {
+    if (!argparse::parse(argc, argv, args, "Args test")) {
         return 1;
     }
     if (args.op == "add") {
