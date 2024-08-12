@@ -74,7 +74,10 @@ bool parse_word(
     return parse_word(word, choices, value.value());
 }
 
-bool Parser::parse(const char* program, const std::span<const char*>& words) const {
+bool Parser::parse(
+    const std::string& program,
+    const std::span<const char*>& words) const
+{
     bool have_list_arg = false;
     bool have_optional_arg = false;
     for (const auto& item: items) {
@@ -91,20 +94,16 @@ bool Parser::parse(const char* program, const std::span<const char*>& words) con
             continue;
         }
     }
-
-    if (words.empty()) {
-        std::cout << help_message(program) << std::endl;
-        return false;
+    if (have_optional_arg && !subcommands.empty()) {
+        throw UsageError("Cannot have an optional arg and subcommands");
     }
-    for (auto word: words) {
-        if (std::string_view(word) == "-h" || std::string_view(word) == "--help") {
-            std::cout << help_message(program) << std::endl;
-            return false;
-        }
+    if (have_list_arg && !subcommands.empty()) {
+        throw UsageError("Cannot have a list arg and subcommands");
     }
 
     std::size_t word_i = 0;
     std::size_t arg_i = 0; // Positional argument
+    std::vector<Subcommand>::const_iterator subcommand = subcommands.end();
 
     std::vector<bool> item_has_value;
     for (const auto& item: items) {
@@ -116,11 +115,29 @@ bool Parser::parse(const char* program, const std::span<const char*>& words) con
         word_i++;
 
         assert(!word.empty());
-        bool is_flag = word[0] == '-';
+        bool is_flag = (word[0] == '-');
+
+        if (word == "-h" || word == "--help") {
+            std::cout << help_message(program) << std::endl;
+            return false;
+        }
 
         std::size_t item_i;
         if (!is_flag) {
             if (arg_i == args.size()) {
+                if (!subcommands.empty()) {
+                    subcommand = std::find_if(
+                        subcommands.begin(), subcommands.end(),
+                        [&word](const Subcommand& value) {
+                            return value.name == word;
+                        }
+                    );
+                    if (subcommand == subcommands.end()) {
+                        std::cout << "Invalid subcommand '" << word << "'\n";
+                        return false;
+                    }
+                    break;
+                }
                 std::cout << "Extra position argument '" << word << "'\n";
                 return false;
             }
@@ -186,10 +203,19 @@ bool Parser::parse(const char* program, const std::span<const char*>& words) con
         return false;
     }
 
+    if (subcommand != subcommands.end()) {
+        if (!subcommand->callback(program, words.subspan(word_i))) {
+            return false;
+        }
+    } else if (subcommand_required) {
+        std::cout << "Missing subcommand\n";
+        return false;
+    }
+
     return true;
 }
 
-std::string Parser::help_message(const char* program) const {
+std::string Parser::help_message(const std::string& program) const {
     std::stringstream ss;
     ss << program;
     if (!description.empty()) {
@@ -225,31 +251,54 @@ std::string Parser::help_message(const char* program) const {
         ss << "]";
     };
 
+    bool have_required_flag = false;
+    bool have_optional_flag = false;
+    bool have_arg = false;
+    for (const auto& item: items) {
+        have_required_flag |= (item.type == ItemType::Flag && !item.is_optional);
+        have_required_flag |= (item.type == ItemType::Flag && item.is_optional);
+        have_arg |= (item.type == ItemType::Arg);
+    }
+
     bool have_flag_help = false;
     bool have_arg_help = false;
 
     // Required flags <--flag|-f>
-    ss << "\n ";
-    for (const auto& item: items) {
-        if (item.type != ItemType::Flag) continue;
-        if (item.has_default) continue;
-        print_item(item);
-        have_flag_help |= !item.help.empty() || !item.choices.empty();
+    if (have_required_flag) {
+        ss << "\n ";
+        for (const auto& item: items) {
+            if (item.type != ItemType::Flag) continue;
+            if (item.has_default) continue;
+            print_item(item);
+            have_flag_help |= !item.help.empty() || !item.choices.empty();
+        }
     }
     // Optional flags [--flag|-f] {default}
-    ss << "\n ";
-    for (const auto& item: items) {
-        if (item.type != ItemType::Flag) continue;
-        if (!item.has_default) continue;
-        print_item(item);
-        have_flag_help |= !item.help.empty() || !item.choices.empty();
+    if (have_optional_flag) {
+        ss << "\n ";
+        for (const auto& item: items) {
+            if (item.type != ItemType::Flag) continue;
+            if (!item.has_default) continue;
+            print_item(item);
+            have_flag_help |= !item.help.empty() || !item.choices.empty();
+        }
     }
     // Args (note: guaranteed to have required args first)
-    ss << "\n ";
-    for (const auto& item: items) {
-        if (item.type != ItemType::Arg) continue;
-        print_item(item);
-        have_arg_help |= !item.help.empty() || !item.choices.empty();
+    if (have_arg) {
+        ss << "\n ";
+        for (const auto& item: items) {
+            if (item.type != ItemType::Arg) continue;
+            print_item(item);
+            have_arg_help |= !item.help.empty() || !item.choices.empty();
+        }
+    }
+    // Subcommand
+    if (!subcommands.empty()) {
+        if (subcommand_required) {
+            ss << "\n  <subcommand>";
+        } else {
+            ss << "\n  [subcommand]";
+        }
     }
     ss << "\n";
 
@@ -293,7 +342,7 @@ std::string Parser::help_message(const char* program) const {
             print_choices(item.choices);
         }
     }
-    if (have_flag_help) {
+    if (have_arg_help) {
         ss << "\n\033[1mARGUMENTS:\033[0m\n";
         for (const auto& item: items) {
             if (item.type != ItemType::Arg) continue;
@@ -303,6 +352,20 @@ std::string Parser::help_message(const char* program) const {
             ss << "\n";
             print_help(item.help);
             print_choices(item.choices);
+        }
+    }
+    if (!subcommands.empty()) {
+        ss << "\n\033[1mSUBCOMMAND:\033[0m";
+        if (!subcommand_required) {
+            ss << " (optional)";
+        }
+        ss << "\n";
+        for (const auto& subcommand: subcommands) {
+            ss << "  " << subcommand.name;
+            if (!subcommand.description.empty()) {
+                ss << "  " << subcommand.description;
+            }
+            ss << "\n";
         }
     }
 

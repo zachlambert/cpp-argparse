@@ -6,6 +6,9 @@ struct AddCommand: public argparse::Args {
     int a;
     int b;
 private:
+    std::string description() const override {
+        return "Add two numbers";
+    }
     void build(argparse::Parser& parser) override {
         parser.add(a, "a").help("First argument");
         parser.add(b, "b").help("Second argument");
@@ -15,6 +18,9 @@ private:
 struct NegateCommand: public argparse::Args {
     int value;
 private:
+    std::string description() const override {
+        return "Negate a number";
+    }
     void build(argparse::Parser& parser) override {
         parser.add(value, "value").help("Argument");
     }
@@ -25,8 +31,9 @@ struct CliArgs: public argparse::Args {
     Command command;
 private:
     void build(argparse::Parser& parser) override {
-        parser.subcommand<AddCommand>(command, "add", "Add two numbers");
-        parser.subcommand<NegateCommand>(command, "add", "Add two numbers");
+        parser.subcommand(command)
+            .add<AddCommand>("add")
+            .add<NegateCommand>("negate");
     }
 };
 

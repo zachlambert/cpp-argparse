@@ -16,8 +16,11 @@
 
 namespace argparse {
 
-template <typename T, bool Optional>
-using select_opt = std::conditional_t<Optional, std::optional<T>, T>;
+template <typename T>
+static constexpr bool is_optional = false;
+
+template <typename T>
+static constexpr bool is_optional<std::optional<T>> = true;
 
 template <typename T>
 concept is_simple_t =
@@ -27,9 +30,7 @@ concept is_simple_t =
 
 template <typename T>
 concept is_optional_t =
-    std::is_same_v<T, std::optional<int>>
-    || std::is_same_v<T, std::optional<double>>
-    || std::is_same_v<T, std::optional<std::string>>
+    is_optional<T>
     || std::is_same_v<T, bool>
     || std::is_same_v<T, std::vector<std::string>>;
 
@@ -107,10 +108,26 @@ public:
     virtual void build(Parser& parser) = 0;
 };
 
+struct Subcommand {
+    using callback_t = std::function<
+        bool(
+            const std::string&,
+            std::span<const char*>
+        )
+    >;
+    std::string name;
+    std::string description;
+    callback_t callback;
+};
+
+template <typename OutputT>
+class SubcommandHandle;
+
 class Parser {
 public:
     Parser(const std::string& description = ""):
-        description(description)
+        description(description),
+        subcommand_required(false)
     {}
 
     template <is_output_t T>
@@ -137,47 +154,73 @@ public:
         return ItemHandle(&output, &items.back());
     }
 
-    template <typename ArgsT, typename OutputT>
-    requires std::is_base_of_v<Args, ArgsT> && std::convertible_to<ArgsT, OutputT>
-    void subcommand(OutputT& output, const std::string& name, const std::string& description="") {
-        Subcommand subcommand;
-        subcommand.name = name;
-        subcommand.description = description;
-        subcommand.callback = [&output](const char* program, std::span<const char*> words) {
-            ArgsT args;
-            Parser parser;
-            ((Args&)args).build(parser);
-            if (!parser.parse(program, words)) {
-                return false;
-            }
-            output = args;
-            return true;
-        };
-        subcommands.push_back(subcommand);
-    };
-
-    [[nodiscard]] bool parse(const char* program, const std::span<const char*>& words) const;
+    template <typename OutputT>
+    SubcommandHandle<OutputT> subcommand(OutputT& output);
 
     [[nodiscard]] bool parse(int argc, const char** argv) const {
-        return parse(argv[0], std::span<const char*>(argv+1, argc-1));
+        return parse(std::string(argv[0]), std::span<const char*>(argv+1, argc-1));
     }
 
 private:
-    std::string help_message(const char* program) const;
+    [[nodiscard]] bool parse(const std::string& program, const std::span<const char*>& words) const;
+    std::string help_message(const std::string& program) const;
     ItemType parse_identifier(const std::string& identifier);
 
     const std::string description;
     std::vector<Item> items;
     std::unordered_map<std::string, std::size_t> flags;
     std::vector<std::size_t> args;
-
-    struct Subcommand {
-        std::string name;
-        std::string description;
-        std::function<bool(const char*, std::span<const char*>)> callback;
-    };
     std::vector<Subcommand> subcommands;
+    bool subcommand_required;
+
+    template <typename OutputT>
+    friend class SubcommandHandle;
 };
+
+template <typename OutputT>
+class SubcommandHandle {
+public:
+    SubcommandHandle(OutputT& output, std::vector<Subcommand>& subcommands):
+        output(&output),
+        subcommands(&subcommands)
+    {}
+    template <typename ArgsT>
+    requires std::is_base_of_v<Args, ArgsT> && std::convertible_to<ArgsT, OutputT>
+    SubcommandHandle& add(const std::string& name) {
+        OutputT* captured_output = output;
+        Subcommand subcommand;
+        subcommand.name = name;
+        subcommand.description = ((const Args&)ArgsT()).description();
+        subcommand.callback =
+            [captured_output, name](
+                const std::string& program,
+                std::span<const char*> words)
+            {
+                ArgsT args;
+                Parser parser;
+                ((Args&)args).build(parser);
+                if (!parser.parse(program + " " + name, words)) {
+                    return false;
+                }
+                *captured_output = args;
+                return true;
+            };
+        subcommands->push_back(subcommand);
+        return *this;
+    }
+private:
+    OutputT* output;
+    std::vector<Subcommand>* subcommands;
+};
+
+template <typename OutputT>
+SubcommandHandle<OutputT> Parser::subcommand(OutputT& output) {
+    if (!subcommands.empty()) {
+        throw UsageError("Cannot call subcommand twice");
+    }
+    subcommand_required = !is_optional<OutputT>;
+    return SubcommandHandle<OutputT>(output, subcommands);
+}
 
 [[nodiscard]] inline bool parse(int argc, const char** argv, Args& args)  {
     Parser parser(args.description());
