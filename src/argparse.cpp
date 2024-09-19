@@ -115,7 +115,7 @@ bool Parser::parse(
         word_i++;
 
         assert(!word.empty());
-        bool is_flag = (word[0] == '-');
+        bool is_flag = (word[0] == '-' && (word[1] == '-' || !std::isdigit(word[1])));
 
         if (word == "-h" || word == "--help") {
             std::cout << help_message(program) << std::endl;
